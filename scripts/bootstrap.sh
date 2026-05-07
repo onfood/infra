@@ -35,8 +35,9 @@ ufw default allow outgoing
 ufw allow 22/tcp comment 'ssh'
 ufw allow 80/tcp comment 'http acme + redirect'
 ufw allow 443/tcp comment 'https'
-# Keep nginx-ui open if user uses it; remove if not
+# Coexisting services on this server
 ufw allow 9000/tcp comment 'nginx-ui'
+ufw allow 3001/tcp comment 'workly-docs-ai'
 ufw --force enable
 ufw status verbose
 
