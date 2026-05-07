@@ -58,11 +58,12 @@ services:
   # ────────────────────────────────────────────────────────────────
   # Backend (Go) — 5 services from 5 separate images
   # ────────────────────────────────────────────────────────────────
+  # Backend binaries share one env file (single Config struct in code)
   customer-api:
     image: ghcr.io/onfood/backend-customer-api:dev
     <<: [*restart, *logging]
     depends_on: *go-depends
-    env_file: ./env/customer-api.env
+    env_file: ./env/backend.env
     ports:
       - "127.0.0.1:3020:8001"
     networks: [qber]
@@ -71,7 +72,7 @@ services:
     image: ghcr.io/onfood/backend-business-api:dev
     <<: [*restart, *logging]
     depends_on: *go-depends
-    env_file: ./env/business-api.env
+    env_file: ./env/backend.env
     ports:
       - "127.0.0.1:3021:8002"
     networks: [qber]
@@ -80,21 +81,21 @@ services:
     image: ghcr.io/onfood/backend-customer-bot:dev
     <<: [*restart, *logging]
     depends_on: *go-depends
-    env_file: ./env/customer-bot.env
+    env_file: ./env/backend.env
     networks: [qber]
 
   business-bot:
     image: ghcr.io/onfood/backend-business-bot:dev
     <<: [*restart, *logging]
     depends_on: *go-depends
-    env_file: ./env/business-bot.env
+    env_file: ./env/backend.env
     networks: [qber]
 
   scheduler:
     image: ghcr.io/onfood/backend-scheduler:dev
     <<: [*restart, *logging]
     depends_on: *go-depends
-    env_file: ./env/scheduler.env
+    env_file: ./env/backend.env
     networks: [qber]
 
   # ────────────────────────────────────────────────────────────────
