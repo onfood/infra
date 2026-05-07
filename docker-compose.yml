@@ -1,0 +1,146 @@
+name: qber
+
+# All services share this internal network.
+# Postgres + backends + frontends talk to each other via docker DNS.
+# Only frontends + backends bind to 127.0.0.1 so host nginx can reach them.
+
+x-restart: &restart
+  restart: unless-stopped
+
+x-logging: &logging
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  # ────────────────────────────────────────────────────────────────
+  # Database
+  # ────────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:18-alpine
+    <<: [*restart, *logging]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # No port exposure on host — only reachable inside compose network
+    networks:
+      - qber
+
+  # ────────────────────────────────────────────────────────────────
+  # Migrations (one-shot job, runs on every deploy)
+  # ────────────────────────────────────────────────────────────────
+  migrate:
+    image: ghcr.io/onfood/migrations:dev
+    <<: *logging
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+    restart: "no"
+    networks:
+      - qber
+
+  # ────────────────────────────────────────────────────────────────
+  # Backend (Go) — 3 separate processes, same image, different binary
+  # ────────────────────────────────────────────────────────────────
+  customer-api:
+    image: ghcr.io/onfood/backend:dev
+    command: ["/app/bin/customer-api"]
+    <<: [*restart, *logging]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    env_file: ./env/customer-api.env
+    ports:
+      - "127.0.0.1:3020:8001"
+    networks:
+      - qber
+
+  business-api:
+    image: ghcr.io/onfood/backend:dev
+    command: ["/app/bin/business-api"]
+    <<: [*restart, *logging]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    env_file: ./env/business-api.env
+    ports:
+      - "127.0.0.1:3021:8002"
+    networks:
+      - qber
+
+  admin-api:
+    image: ghcr.io/onfood/backend:dev
+    command: ["/app/bin/admin-api"]
+    <<: [*restart, *logging]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    env_file: ./env/admin-api.env
+    ports:
+      - "127.0.0.1:3022:8003"
+    networks:
+      - qber
+
+  # ────────────────────────────────────────────────────────────────
+  # Frontends (Next.js)
+  # ────────────────────────────────────────────────────────────────
+  customer:
+    image: ghcr.io/onfood/customer:dev
+    <<: [*restart, *logging]
+    depends_on:
+      - customer-api
+    env_file: ./env/customer.env
+    ports:
+      - "127.0.0.1:3010:3000"
+    networks:
+      - qber
+
+  business:
+    image: ghcr.io/onfood/business:dev
+    <<: [*restart, *logging]
+    depends_on:
+      - business-api
+    env_file: ./env/business.env
+    ports:
+      - "127.0.0.1:3011:3000"
+    networks:
+      - qber
+
+  admin:
+    image: ghcr.io/onfood/adminpanel:dev
+    <<: [*restart, *logging]
+    depends_on:
+      - admin-api
+    env_file: ./env/admin.env
+    ports:
+      - "127.0.0.1:3012:3000"
+    networks:
+      - qber
+
+volumes:
+  pg_data:
+    name: qber_pg_data
+
+networks:
+  qber:
+    name: qber_internal
+    driver: bridge

@@ -1,0 +1,14 @@
+# Real env files never committed
+.env
+env/*.env
+!env/.env.example
+*.env.local
+
+# Backups
+backups/
+*.sql
+*.sql.gz
+
+# Local debug
+*.log
+.DS_Store

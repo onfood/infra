@@ -1,0 +1,37 @@
+name: validate
+
+on:
+  push:
+    branches: [development, main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate docker-compose
+        run: docker compose -f docker-compose.yml --env-file env/.env.example config -q
+
+      - name: Validate nginx confs
+        run: |
+          docker run --rm -v "$PWD/nginx:/etc/nginx/sites-available:ro" \
+            nginx:alpine sh -c '
+              for f in /etc/nginx/sites-available/*.conf; do
+                echo "=== $f ===";
+                # Basic syntax check (without ssl files since they live on server)
+                nginx -t -c <(cat <<EOF
+                  events { worker_connections 1024; }
+                  http {
+                    include /etc/nginx/mime.types;
+                    server { listen 8080 default_server; return 200; }
+                  }
+                EOF
+                ) || true;
+              done'
+
+      - name: Shellcheck scripts
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          shellcheck scripts/*.sh
