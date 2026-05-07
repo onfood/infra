@@ -63,7 +63,7 @@ services:
     image: ghcr.io/onfood/backend-customer-api:dev
     <<: [*restart, *logging]
     depends_on: *go-depends
-    env_file: ./env/backend.env
+    env_file: ../env/backend.env
     ports:
       - "127.0.0.1:3020:8001"
     networks: [qber]
@@ -72,7 +72,7 @@ services:
     image: ghcr.io/onfood/backend-business-api:dev
     <<: [*restart, *logging]
     depends_on: *go-depends
-    env_file: ./env/backend.env
+    env_file: ../env/backend.env
     ports:
       - "127.0.0.1:3021:8002"
     networks: [qber]
@@ -81,21 +81,21 @@ services:
     image: ghcr.io/onfood/backend-customer-bot:dev
     <<: [*restart, *logging]
     depends_on: *go-depends
-    env_file: ./env/backend.env
+    env_file: ../env/backend.env
     networks: [qber]
 
   business-bot:
     image: ghcr.io/onfood/backend-business-bot:dev
     <<: [*restart, *logging]
     depends_on: *go-depends
-    env_file: ./env/backend.env
+    env_file: ../env/backend.env
     networks: [qber]
 
   scheduler:
     image: ghcr.io/onfood/backend-scheduler:dev
     <<: [*restart, *logging]
     depends_on: *go-depends
-    env_file: ./env/backend.env
+    env_file: ../env/backend.env
     networks: [qber]
 
   # ────────────────────────────────────────────────────────────────
@@ -105,7 +105,7 @@ services:
     image: ghcr.io/onfood/customer:dev
     <<: [*restart, *logging]
     depends_on: [customer-api]
-    env_file: ./env/customer.env
+    env_file: ../env/customer.env
     ports:
       - "127.0.0.1:3010:3000"
     networks: [qber]
@@ -114,7 +114,7 @@ services:
     image: ghcr.io/onfood/business:dev
     <<: [*restart, *logging]
     depends_on: [business-api]
-    env_file: ./env/business.env
+    env_file: ../env/business.env
     ports:
       - "127.0.0.1:3011:3001"
     networks: [qber]
@@ -127,7 +127,7 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
-    env_file: ./env/adminpanel.env
+    env_file: ../env/adminpanel.env
     ports:
       - "127.0.0.1:3012:3000"
     networks: [qber]
