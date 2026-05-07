@@ -1,8 +1,8 @@
 name: qber
 
-# All services share this internal network.
-# Postgres + backends + frontends talk to each other via docker DNS.
-# Only frontends + backends bind to 127.0.0.1 so host nginx can reach them.
+# Internal-only postgres + 5 Go services + 3 Next.js services.
+# Frontends bind to 127.0.0.1:30XX so host nginx can reverse-proxy them.
+# Bots + scheduler stay fully internal (no port exposure needed).
 
 x-restart: &restart
   restart: unless-stopped
@@ -13,6 +13,12 @@ x-logging: &logging
     options:
       max-size: "10m"
       max-file: "3"
+
+x-go-depends: &go-depends
+  postgres:
+    condition: service_healthy
+  migrate:
+    condition: service_completed_successfully
 
 services:
   # ────────────────────────────────────────────────────────────────
@@ -33,9 +39,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    # No port exposure on host — only reachable inside compose network
-    networks:
-      - qber
+    networks: [qber]
 
   # ────────────────────────────────────────────────────────────────
   # Migrations (one-shot job, runs on every deploy)
@@ -49,56 +53,49 @@ services:
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
     restart: "no"
-    networks:
-      - qber
+    networks: [qber]
 
   # ────────────────────────────────────────────────────────────────
-  # Backend (Go) — 3 separate processes, same image, different binary
+  # Backend (Go) — 5 services from 5 separate images
   # ────────────────────────────────────────────────────────────────
   customer-api:
-    image: ghcr.io/onfood/backend:dev
-    command: ["/app/bin/customer-api"]
+    image: ghcr.io/onfood/backend-customer-api:dev
     <<: [*restart, *logging]
-    depends_on:
-      postgres:
-        condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
+    depends_on: *go-depends
     env_file: ./env/customer-api.env
     ports:
       - "127.0.0.1:3020:8001"
-    networks:
-      - qber
+    networks: [qber]
 
   business-api:
-    image: ghcr.io/onfood/backend:dev
-    command: ["/app/bin/business-api"]
+    image: ghcr.io/onfood/backend-business-api:dev
     <<: [*restart, *logging]
-    depends_on:
-      postgres:
-        condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
+    depends_on: *go-depends
     env_file: ./env/business-api.env
     ports:
       - "127.0.0.1:3021:8002"
-    networks:
-      - qber
+    networks: [qber]
 
-  admin-api:
-    image: ghcr.io/onfood/backend:dev
-    command: ["/app/bin/admin-api"]
+  customer-bot:
+    image: ghcr.io/onfood/backend-customer-bot:dev
     <<: [*restart, *logging]
-    depends_on:
-      postgres:
-        condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
-    env_file: ./env/admin-api.env
-    ports:
-      - "127.0.0.1:3022:8003"
-    networks:
-      - qber
+    depends_on: *go-depends
+    env_file: ./env/customer-bot.env
+    networks: [qber]
+
+  business-bot:
+    image: ghcr.io/onfood/backend-business-bot:dev
+    <<: [*restart, *logging]
+    depends_on: *go-depends
+    env_file: ./env/business-bot.env
+    networks: [qber]
+
+  scheduler:
+    image: ghcr.io/onfood/backend-scheduler:dev
+    <<: [*restart, *logging]
+    depends_on: *go-depends
+    env_file: ./env/scheduler.env
+    networks: [qber]
 
   # ────────────────────────────────────────────────────────────────
   # Frontends (Next.js)
@@ -106,35 +103,33 @@ services:
   customer:
     image: ghcr.io/onfood/customer:dev
     <<: [*restart, *logging]
-    depends_on:
-      - customer-api
+    depends_on: [customer-api]
     env_file: ./env/customer.env
     ports:
       - "127.0.0.1:3010:3000"
-    networks:
-      - qber
+    networks: [qber]
 
   business:
     image: ghcr.io/onfood/business:dev
     <<: [*restart, *logging]
-    depends_on:
-      - business-api
+    depends_on: [business-api]
     env_file: ./env/business.env
     ports:
-      - "127.0.0.1:3011:3000"
-    networks:
-      - qber
+      - "127.0.0.1:3011:3001"
+    networks: [qber]
 
-  admin:
+  adminpanel:
     image: ghcr.io/onfood/adminpanel:dev
     <<: [*restart, *logging]
     depends_on:
-      - admin-api
-    env_file: ./env/admin.env
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    env_file: ./env/adminpanel.env
     ports:
       - "127.0.0.1:3012:3000"
-    networks:
-      - qber
+    networks: [qber]
 
 volumes:
   pg_data:
