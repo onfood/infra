@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# backup.sh — nightly pg_dump of qber database.
-# Runs from cron as deploy user. Keeps last 14 dumps, gzipped.
+# backup.sh — nightly pg_dump of the onfood-dev database.
+# Runs from cron as the deploy user. Keeps last 14 dumps, gzipped.
 
 set -euo pipefail
 
-INSTALL_DIR=${INSTALL_DIR:-/opt/qber}
+INSTALL_DIR=${INSTALL_DIR:-/opt/onfood-dev}
 BACKUP_DIR=$INSTALL_DIR/backups
 KEEP_DAYS=14
 
@@ -16,7 +16,7 @@ source "$INSTALL_DIR/.env"
 set +a
 
 ts=$(date -u +%Y-%m-%dT%H-%M-%S)
-out="$BACKUP_DIR/qber-$ts.sql.gz"
+out="$BACKUP_DIR/onfood-dev-$ts.sql.gz"
 
 # pg_dump runs inside compose so we don't need network exposure
 docker compose -f "$INSTALL_DIR/infra/docker-compose.yml" --env-file "$INSTALL_DIR/.env" \
@@ -26,4 +26,4 @@ docker compose -f "$INSTALL_DIR/infra/docker-compose.yml" --env-file "$INSTALL_D
 echo "wrote $out ($(du -h "$out" | cut -f1))"
 
 # Prune old
-find "$BACKUP_DIR" -name "qber-*.sql.gz" -type f -mtime +$KEEP_DAYS -delete -print
+find "$BACKUP_DIR" -name "onfood-dev-*.sql.gz" -type f -mtime +$KEEP_DAYS -delete -print

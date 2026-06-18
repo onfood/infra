@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# deploy.sh — pull latest images, run migrations, restart stack.
+# deploy.sh — pull latest images, run migrations, (re)start the onfood-dev stack.
 #
-# Called by:
-#   - GitHub Actions workflows (after pushing new image to GHCR)
-#   - Manually for ad-hoc redeploys
+# Called by each app repo's GitHub Actions workflow over SSH after a new image
+# is pushed to GHCR, and usable manually for ad-hoc redeploys.
 #
-# Single-arg mode: deploy.sh <service>
-#   only that service is pulled + restarted (used by per-app CI jobs).
-# No-arg mode: pulls all images, restarts everything.
-#
-# Always runs migrations job before bringing services up.
+#   deploy.sh                # full stack: pull all, migrate, up everything
+#   deploy.sh backend        # pull+restart the 5 Go services (runs migrate first)
+#   deploy.sh migrations     # run the one-shot migrate job only
+#   deploy.sh eats           # pull+restart the eats frontend only
+#   deploy.sh business       # pull+restart the business frontend only
+#   deploy.sh adminpanel     # pull+restart the adminpanel only
 
 set -euo pipefail
 
-INSTALL_DIR=${INSTALL_DIR:-/opt/qber}
+INSTALL_DIR=${INSTALL_DIR:-/opt/onfood-dev}
 COMPOSE="docker compose -f $INSTALL_DIR/infra/docker-compose.yml --env-file $INSTALL_DIR/.env"
 
 SERVICE=${1:-}
@@ -23,49 +23,61 @@ err() { echo -e "\033[1;31m[error]\033[0m $*" >&2; exit 1; }
 
 cd "$INSTALL_DIR"
 
-# Login to GHCR (token comes from /opt/qber/.ghcr-token, written by bootstrap)
-if [[ -f $INSTALL_DIR/.ghcr-token ]]; then
+# Map the deploy identifier to compose service(s) + whether to run migrations.
+RUN_MIGRATE=0
+ONLY_MIGRATE=0
+case "$SERVICE" in
+  "")            TARGETS=""; RUN_MIGRATE=1 ;;
+  backend)       TARGETS="eats-api business-api eats-bot business-bot scheduler"; RUN_MIGRATE=1 ;;
+  migrations|migrate) TARGETS=""; RUN_MIGRATE=1; ONLY_MIGRATE=1 ;;
+  eats|business|adminpanel) TARGETS="$SERVICE" ;;
+  *)             TARGETS="$SERVICE" ;;
+esac
+
+# GHCR login (token + user written during setup). Skipped if absent — works
+# without it when the onfood dev packages are public.
+if [[ -f $INSTALL_DIR/.ghcr-token && -f $INSTALL_DIR/.ghcr-user ]]; then
   log "ghcr login"
-  cat $INSTALL_DIR/.ghcr-token | docker login ghcr.io -u $(cat $INSTALL_DIR/.ghcr-user) --password-stdin >/dev/null
+  cat "$INSTALL_DIR/.ghcr-token" | docker login ghcr.io \
+    -u "$(cat "$INSTALL_DIR/.ghcr-user")" --password-stdin >/dev/null
 fi
 
 # Pull
-if [[ -n "$SERVICE" ]]; then
-  log "pulling $SERVICE"
-  $COMPOSE pull "$SERVICE"
+if [[ "$ONLY_MIGRATE" -eq 1 ]]; then
+  log "pulling migrate image"
+  $COMPOSE pull migrate
+elif [[ -n "$TARGETS" ]]; then
+  log "pulling: $TARGETS"
+  $COMPOSE pull $TARGETS
 else
   log "pulling all services"
   $COMPOSE pull
 fi
 
-# Always run migrations (one-shot, exits when done)
-# Skip if SERVICE is "migrate" itself (avoid loop) or if a single non-backend service is targeted.
-case "$SERVICE" in
-  ""|customer-api|business-api|admin-api|migrate)
-    log "running migrations"
-    $COMPOSE run --rm migrate
-    ;;
-  *)
-    log "skipping migrations for frontend-only deploy of $SERVICE"
-    ;;
-esac
+# Migrations (one-shot, idempotent)
+if [[ "$RUN_MIGRATE" -eq 1 ]]; then
+  log "running migrations"
+  $COMPOSE run --rm migrate
+fi
 
-# Bring services up (zero-downtime where possible)
-if [[ -n "$SERVICE" && "$SERVICE" != "migrate" ]]; then
-  log "restarting $SERVICE"
-  $COMPOSE up -d --no-deps --remove-orphans "$SERVICE"
-elif [[ -z "$SERVICE" ]]; then
+# Bring services up
+if [[ "$ONLY_MIGRATE" -eq 1 ]]; then
+  : # nothing else to start
+elif [[ -n "$TARGETS" ]]; then
+  log "restarting: $TARGETS"
+  $COMPOSE up -d --no-deps --remove-orphans $TARGETS
+else
   log "starting full stack"
   $COMPOSE up -d --remove-orphans
 fi
 
-# Healthcheck
+# Status
 sleep 5
 log "container status"
 $COMPOSE ps
 
-# Cleanup unused images
-log "pruning old images"
-docker image prune -af --filter "until=168h" >/dev/null
+# Prune images older than 7 days (onfood-dev images only are affected in practice)
+log "pruning dangling images"
+docker image prune -f >/dev/null 2>&1 || true
 
 log "deploy complete"

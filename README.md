@@ -1,127 +1,104 @@
-# qber infra
+# onfood infra — test/staging
 
-Server infrastructure for qber (food-surplus marketplace) production stack.
+Deploy configuration for the OnFood **test/staging** environment, hosted on the
+shared `tamweel` server (`84.247.143.87`). Images are built in CI and pulled from
+GHCR; the host's nginx reverse-proxies each service with Let's Encrypt TLS.
 
-Hosts: customer (`eats.qber.uz`), business (`business.qber.uz`), admin (`admin.qber.uz`), backend gateway (`api.qber.uz`).
+Hosts: customer (`test-eats.onfood.uz`), business (`test-business.onfood.uz`),
+admin (`test-admin.onfood.uz`), API gateway (`test-api.onfood.uz`), CDN
+(`test-cdn.onfood.uz`).
+
+> History: this repo started as the "qber" production template. It has been
+> repurposed for the onfood test environment on tamweel.
 
 ## Layout
 
 ```
 infra/
-├── docker-compose.yml        # full stack: postgres + 3 backends + 3 frontends + migrate
+├── docker-compose.yml          # postgres + redis + minio + 5 Go + 3 Next.js + migrate
 ├── nginx/
-│   ├── eats.qber.uz.conf
-│   ├── business.qber.uz.conf
-│   ├── admin.qber.uz.conf
-│   ├── api.qber.uz.conf
-│   └── snippets/qber-proxy.conf
+│   ├── test-eats.onfood.uz.conf
+│   ├── test-business.onfood.uz.conf
+│   ├── test-admin.onfood.uz.conf
+│   ├── test-api.onfood.uz.conf      # path gateway: /eats, /business, /webhooks/*
+│   ├── test-cdn.onfood.uz.conf      # minio
+│   └── snippets/onfood-proxy.conf
 ├── scripts/
-│   ├── bootstrap.sh          # one-time server setup
-│   ├── install-nginx-sites.sh
-│   ├── issue-certs.sh        # Let's Encrypt cert issuance
-│   ├── deploy.sh             # pull + migrate + up (called by CI)
-│   └── backup.sh             # nightly pg_dump (called by cron)
-└── env/.env.example          # template for secrets (real files: env/*.env on server)
+│   ├── bootstrap.sh            # one-time, non-destructive host setup
+│   ├── issue-certs.sh          # Let's Encrypt via webroot (no nginx downtime)
+│   ├── install-nginx-sites.sh  # install the HTTPS vhosts
+│   ├── deploy.sh               # pull + migrate + up (called by CI)
+│   └── backup.sh               # nightly pg_dump (cron)
+└── env/*.example               # env templates (real files: /opt/onfood-dev/{.env,env/*.env})
 ```
 
-## Server layout
+## Server layout (`/opt/onfood-dev`)
 
 ```
-/opt/qber/
-├── infra/                    # this repo, cloned on server
-├── env/                      # per-service env files (gitignored)
-│   ├── customer.env
-│   ├── customer-api.env
+/opt/onfood-dev/
+├── infra/                # this repo, cloned on the server (development branch)
+├── .env                  # compose-level: POSTGRES_*, MINIO_*, R2_BUCKET
+├── env/
+│   ├── backend.env       # all 5 Go services
+│   ├── eats.env
 │   ├── business.env
-│   ├── business-api.env
-│   ├── admin.env
-│   ├── admin-api.env
-│   └── ...
-├── .env                      # top-level secrets (POSTGRES_* etc.)
-├── .ghcr-token               # GHCR pull token for docker login
-├── .ghcr-user                # GHCR username
-└── backups/                  # nightly pg_dump output, last 14 kept
+│   └── adminpanel.env
+├── .ghcr-token           # GHCR read:packages PAT (docker login)
+├── .ghcr-user            # GHCR username
+└── backups/              # nightly pg_dump, last 14
 ```
-
-## First-time deploy (manual)
-
-```bash
-# 1. SSH to server
-ssh deploy@31.220.87.237
-
-# 2. Clone infra repo
-sudo git clone https://github.com/onfood/infra /opt/qber/infra
-
-# 3. Bootstrap (one-time)
-sudo bash /opt/qber/infra/scripts/bootstrap.sh
-
-# 4. Add env files (manually, never commit)
-sudo nano /opt/qber/.env                      # POSTGRES_*
-sudo nano /opt/qber/env/customer-api.env      # backend secrets
-sudo nano /opt/qber/env/business-api.env
-sudo nano /opt/qber/env/admin-api.env
-sudo nano /opt/qber/env/customer.env          # frontend env
-sudo nano /opt/qber/env/business.env
-sudo nano /opt/qber/env/admin.env
-
-# 5. GHCR pull token (read-only PAT with read:packages scope)
-echo "ghp_..." | sudo tee /opt/qber/.ghcr-token >/dev/null
-echo "github-username" | sudo tee /opt/qber/.ghcr-user >/dev/null
-
-# 6. Issue certs (briefly stops nginx)
-sudo bash /opt/qber/infra/scripts/issue-certs.sh
-
-# 7. Install nginx sites + reload
-sudo bash /opt/qber/infra/scripts/install-nginx-sites.sh
-
-# 8. First deploy
-sudo -u deploy bash /opt/qber/infra/scripts/deploy.sh
-```
-
-## CI/CD flow
-
-- App repos (`customer`, `business`, `adminpanel`, `backend`, `migrations`) push to `development` branch
-- Each repo's `.github/workflows/deploy.yml`:
-  1. Build docker image
-  2. Push to `ghcr.io/onfood/<app>:dev`
-  3. SSH to server, run `bash /opt/qber/infra/scripts/deploy.sh <service>`
-- Migrations repo special: also runs `migrate up` against prod DB before completing
 
 ## Routing
 
-| Hostname | → Local container |
-|---|---|
-| eats.qber.uz | 127.0.0.1:3010 (customer) |
-| business.qber.uz | 127.0.0.1:3011 (business) |
-| admin.qber.uz | 127.0.0.1:3012 (admin) |
-| api.qber.uz/customer/* | 127.0.0.1:3020 (customer-api, prefix stripped) |
-| api.qber.uz/business/* | 127.0.0.1:3021 (business-api, prefix stripped) |
-| api.qber.uz/admin/* | 127.0.0.1:3022 (admin-api, prefix stripped) |
+| Hostname | → 127.0.0.1 | Service |
+|---|---|---|
+| test-eats.onfood.uz | 3010 | eats (Next.js) |
+| test-business.onfood.uz | 3011 | business (Next.js) |
+| test-admin.onfood.uz | 3012 | adminpanel (Next.js) |
+| test-cdn.onfood.uz | 3025 | minio |
+| test-api.onfood.uz/eats/* | 3020 | eats-api (prefix stripped) |
+| test-api.onfood.uz/business/* | 3021 | business-api (prefix stripped) |
+| test-api.onfood.uz/webhooks/eats | 3023 | eats-bot (→ /webhook) |
+| test-api.onfood.uz/webhooks/business | 3024 | business-bot (→ /webhook) |
 
-Webhook URLs (Click, Telegram, etc.) point to `api.qber.uz/<role>/...`.
+Frontends call the gateway: `NEXT_PUBLIC_BACKEND_URL=https://test-api.onfood.uz/eats` (eats),
+`…/business` (business). postgres/redis stay internal (no host port).
 
-## Renewal
+## CI/CD flow
 
-- `certbot.timer` runs every 12h, auto-renews via webroot challenge
-- `nginx-reload.sh` deploy hook reloads nginx after each renewal
-- Backup cron writes nightly to `/opt/qber/backups/`, keeps last 14 days
+App repos (`backend`, `eats`, `business`, `adminpanel`, `migrations`) push to the
+`development` branch → each repo's `.github/workflows/deploy-dev.yml`:
+
+1. Build docker image(s), push to `ghcr.io/onfood/<svc>:dev` (+ `:dev-<sha>`)
+2. SSH to tamweel, run `bash /opt/onfood-dev/infra/scripts/deploy.sh <service>`
+
+`<service>` is `backend` (5 Go images), `eats`, `business`, `adminpanel`, or
+`migrations`.
+
+## First-time setup
+
+```bash
+ssh tamweel    # root
+git clone git@github.com:onfood/infra /opt/onfood-dev/infra
+bash /opt/onfood-dev/infra/scripts/bootstrap.sh
+# write /opt/onfood-dev/.env + env/*.env  (from env/*.example, fill secrets)
+# write /opt/onfood-dev/.ghcr-token + .ghcr-user
+bash /opt/onfood-dev/infra/scripts/issue-certs.sh
+bash /opt/onfood-dev/infra/scripts/install-nginx-sites.sh
+sudo -u onfood-deploy bash /opt/onfood-dev/infra/scripts/deploy.sh   # full stack
+```
 
 ## Rollback
 
 ```bash
-# Pull a specific tag instead of :dev
-docker pull ghcr.io/onfood/customer:dev-<sha>
-docker tag ghcr.io/onfood/customer:dev-<sha> ghcr.io/onfood/customer:dev
-sudo -u deploy bash /opt/qber/infra/scripts/deploy.sh customer
+docker pull ghcr.io/onfood/eats:dev-<sha>
+docker tag  ghcr.io/onfood/eats:dev-<sha> ghcr.io/onfood/eats:dev
+sudo -u onfood-deploy bash /opt/onfood-dev/infra/scripts/deploy.sh eats
 ```
 
-## Removed services
+## Coexisting on tamweel (NOT touched)
 
-This server was previously running Coolify, ollama, and 2 unused nginx sites
-(`lugat.thenodir.uz`, `my.deltateam.uz`). All cleaned up before qber install.
-
-Coexisting services (NOT touched):
-- `elektr-bot` Go binary (supervisord, real prod bot)
-- system PostgreSQL 14 (has `elektr_bot` real users — qber uses its own postgres-18 in container)
-- workly-docs-ai Node app on :3001 (PM2)
-- nginx-ui :9000
+This host also runs Tamweel, Hisob24, Azaly and Coolify. The onfood-dev stack
+is fully namespaced (`onfood-dev-*` containers, `onfood_dev_internal` network,
+127.0.0.1:30xx ports, separate nginx vhosts). bootstrap.sh never touches the
+firewall, other nginx sites, or system packages.

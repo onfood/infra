@@ -1,8 +1,21 @@
-name: qber
+name: onfood-dev
 
-# Internal-only postgres + 5 Go services + 3 Next.js services.
-# Frontends bind to 127.0.0.1:30XX so host nginx can reverse-proxy them.
-# Bots + scheduler stay fully internal (no port exposure needed).
+# OnFood TEST/STAGING stack — runs on the shared `tamweel` host (84.247.143.87)
+# alongside other projects. Everything is namespaced `onfood-dev-*` and binds
+# only to 127.0.0.1 so the host nginx can reverse-proxy each service. Postgres
+# and redis are NOT published to the host (host already has bare-metal 5432/6379).
+#
+# Images are built in CI and pulled from ghcr.io/onfood/*:dev — never built here.
+#
+# Public routing (host nginx + Let's Encrypt, see ../nginx/):
+#   test-eats.onfood.uz       → eats        (127.0.0.1:3010)
+#   test-business.onfood.uz   → business    (127.0.0.1:3011)
+#   test-admin.onfood.uz      → adminpanel  (127.0.0.1:3012)
+#   test-cdn.onfood.uz        → minio       (127.0.0.1:3025)
+#   test-api.onfood.uz/eats/*      → eats-api      (127.0.0.1:3020, prefix stripped)
+#   test-api.onfood.uz/business/*  → business-api  (127.0.0.1:3021, prefix stripped)
+# Bots (eats-bot, business-bot) run in long-poll mode on test (ENV=dev) — they
+# have no inbound port and no nginx webhook route.
 
 x-restart: &restart
   restart: unless-stopped
@@ -17,15 +30,18 @@ x-logging: &logging
 x-go-depends: &go-depends
   postgres:
     condition: service_healthy
+  redis:
+    condition: service_healthy
   migrate:
     condition: service_completed_successfully
 
 services:
   # ────────────────────────────────────────────────────────────────
-  # Database
+  # Infrastructure
   # ────────────────────────────────────────────────────────────────
   postgres:
-    image: postgres:18-alpine
+    image: postgres:17-alpine
+    container_name: onfood-dev-postgres
     <<: [*restart, *logging]
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
@@ -39,88 +55,148 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    networks: [qber]
+    networks: [onfood-dev]
+
+  redis:
+    image: redis:7-alpine
+    container_name: onfood-dev-redis
+    <<: [*restart, *logging]
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [onfood-dev]
+
+  minio:
+    image: minio/minio:latest
+    container_name: onfood-dev-minio
+    <<: [*restart, *logging]
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "127.0.0.1:3025:9000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks: [onfood-dev]
+
+  # One-shot: create the images bucket + public read policy (idempotent).
+  minio-setup:
+    image: minio/mc:latest
+    <<: *logging
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      sh -c "
+      mc alias set local http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD} &&
+      mc mb --ignore-existing local/${R2_BUCKET:-onfood-images};
+      mc anonymous set download local/${R2_BUCKET:-onfood-images}
+      "
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    restart: "no"
+    networks: [onfood-dev]
 
   # ────────────────────────────────────────────────────────────────
-  # Migrations (one-shot job, runs on every deploy)
+  # Migrations (one-shot job, runs on every backend/migrations deploy)
   # ────────────────────────────────────────────────────────────────
   migrate:
     image: ghcr.io/onfood/migrations:dev
+    container_name: onfood-dev-migrate
     <<: *logging
     depends_on:
       postgres:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
     restart: "no"
-    networks: [qber]
+    networks: [onfood-dev]
 
   # ────────────────────────────────────────────────────────────────
-  # Backend (Go) — 5 services from 5 separate images
+  # Backend (Go) — 5 services from 5 separate images, one shared env file
   # ────────────────────────────────────────────────────────────────
-  # Backend binaries share one env file (single Config struct in code)
-  customer-api:
-    image: ghcr.io/onfood/backend-customer-api:dev
+  eats-api:
+    image: ghcr.io/onfood/eats-api:dev
+    container_name: onfood-dev-eats-api
     <<: [*restart, *logging]
     depends_on: *go-depends
     env_file: ../env/backend.env
     ports:
       - "127.0.0.1:3020:8001"
-    networks: [qber]
+    networks: [onfood-dev]
 
   business-api:
-    image: ghcr.io/onfood/backend-business-api:dev
+    image: ghcr.io/onfood/business-api:dev
+    container_name: onfood-dev-business-api
     <<: [*restart, *logging]
     depends_on: *go-depends
     env_file: ../env/backend.env
     ports:
       - "127.0.0.1:3021:8002"
-    networks: [qber]
+    networks: [onfood-dev]
 
-  customer-bot:
-    image: ghcr.io/onfood/backend-customer-bot:dev
+  # Bots run in long-poll mode on test (ENV=dev), so they need no inbound port
+  # or webhook route — they connect out to Telegram themselves.
+  eats-bot:
+    image: ghcr.io/onfood/eats-bot:dev
+    container_name: onfood-dev-eats-bot
     <<: [*restart, *logging]
     depends_on: *go-depends
     env_file: ../env/backend.env
-    networks: [qber]
+    networks: [onfood-dev]
 
   business-bot:
-    image: ghcr.io/onfood/backend-business-bot:dev
+    image: ghcr.io/onfood/business-bot:dev
+    container_name: onfood-dev-business-bot
     <<: [*restart, *logging]
     depends_on: *go-depends
     env_file: ../env/backend.env
-    networks: [qber]
+    networks: [onfood-dev]
 
   scheduler:
-    image: ghcr.io/onfood/backend-scheduler:dev
+    image: ghcr.io/onfood/scheduler:dev
+    container_name: onfood-dev-scheduler
     <<: [*restart, *logging]
     depends_on: *go-depends
     env_file: ../env/backend.env
-    networks: [qber]
+    networks: [onfood-dev]
 
   # ────────────────────────────────────────────────────────────────
-  # Frontends (Next.js)
+  # Frontends (Next.js, standalone) — image built per-env with baked NEXT_PUBLIC_*
   # ────────────────────────────────────────────────────────────────
-  customer:
-    image: ghcr.io/onfood/customer:dev
+  eats:
+    image: ghcr.io/onfood/eats:dev
+    container_name: onfood-dev-eats
     <<: [*restart, *logging]
-    depends_on: [customer-api]
-    env_file: ../env/customer.env
+    depends_on: [eats-api]
+    env_file: ../env/eats.env
     ports:
       - "127.0.0.1:3010:3000"
-    networks: [qber]
+    networks: [onfood-dev]
 
   business:
     image: ghcr.io/onfood/business:dev
+    container_name: onfood-dev-business
     <<: [*restart, *logging]
     depends_on: [business-api]
     env_file: ../env/business.env
     ports:
       - "127.0.0.1:3011:3001"
-    networks: [qber]
+    networks: [onfood-dev]
 
   adminpanel:
     image: ghcr.io/onfood/adminpanel:dev
+    container_name: onfood-dev-adminpanel
     <<: [*restart, *logging]
     depends_on:
       postgres:
@@ -130,13 +206,15 @@ services:
     env_file: ../env/adminpanel.env
     ports:
       - "127.0.0.1:3012:3000"
-    networks: [qber]
+    networks: [onfood-dev]
 
 volumes:
   pg_data:
-    name: qber_pg_data
+    name: onfood_dev_pg_data
+  minio_data:
+    name: onfood_dev_minio_data
 
 networks:
-  qber:
-    name: qber_internal
+  onfood-dev:
+    name: onfood_dev_internal
     driver: bridge
