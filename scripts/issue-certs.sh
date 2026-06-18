@@ -50,15 +50,15 @@ log "reloading nginx with ACME stubs"
 nginx -t
 systemctl reload nginx
 
-# Build -d args
-d_args=()
-for d in "${to_issue[@]}"; do d_args+=(-d "$d"); done
-
-log "issuing certs (webroot) for: ${to_issue[*]}"
-certbot certonly --webroot -w "$WEBROOT" \
-  --non-interactive --agree-tos --email "$EMAIL" --no-eff-email \
-  --keep-until-expiring \
-  "${d_args[@]}"
+# Issue one cert per domain (separate live/<domain>/ lineage), so each nginx
+# vhost references its own cert path.
+for d in "${to_issue[@]}"; do
+  log "issuing cert for $d"
+  certbot certonly --webroot -w "$WEBROOT" \
+    --non-interactive --agree-tos --email "$EMAIL" --no-eff-email \
+    --keep-until-expiring --cert-name "$d" \
+    -d "$d"
+done
 
 # Ensure nginx reloads after future renewals
 mkdir -p /etc/letsencrypt/renewal-hooks/deploy
