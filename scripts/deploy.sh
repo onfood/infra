@@ -65,19 +65,15 @@ if [[ "$ONLY_MIGRATE" -eq 1 ]]; then
   : # nothing else to start
 elif [[ -n "$TARGETS" ]]; then
   log "restarting: $TARGETS"
-  $COMPOSE up -d --no-deps --remove-orphans $TARGETS
+  $COMPOSE up -d --no-deps $TARGETS
 else
   log "starting full stack"
-  $COMPOSE up -d --remove-orphans
+  $COMPOSE up -d
 fi
 
 # Status
 sleep 5
 log "container status"
 $COMPOSE ps
-
-# Prune images older than 7 days (onfood-dev images only are affected in practice)
-log "pruning dangling images"
-docker image prune -f >/dev/null 2>&1 || true
 
 log "deploy complete"
