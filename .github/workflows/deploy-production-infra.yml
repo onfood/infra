@@ -1,0 +1,102 @@
+name: deploy-production-infra
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - docker-compose.prod.yml
+      - env/*.prod.env.example
+      - env/.env.prod.example
+      - nginx/admin.onfood.uz.conf
+      - nginx/business.onfood.uz.conf
+      - nginx/cdn.onfood.uz.conf
+      - nginx/eats.onfood.uz.conf
+      - nginx/snippets/onfood-proxy.conf
+      - scripts/*-prod.sh
+      - scripts/validate-prod-compose.sh
+      - README.md
+      - .github/workflows/deploy-production-infra.yml
+  workflow_dispatch:
+
+concurrency:
+  group: production-infra
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate production compose
+        run: bash scripts/validate-prod-compose.sh
+
+      - name: Shellcheck production scripts
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck
+          shellcheck -S error scripts/*-prod.sh scripts/validate-prod-compose.sh
+
+  deploy:
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Package infra runtime
+        run: |
+          tar -czf /tmp/onfood-prod-infra.tgz \
+            docker-compose.prod.yml \
+            README.md \
+            env \
+            nginx \
+            scripts
+
+      - name: Upload and install infra runtime
+        env:
+          PROD_DEPLOY_HOST: ${{ secrets.PROD_DEPLOY_HOST }}
+          PROD_DEPLOY_USER: ${{ secrets.PROD_DEPLOY_USER }}
+          PROD_DEPLOY_SSH_KEY: ${{ secrets.PROD_DEPLOY_SSH_KEY }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$PROD_DEPLOY_SSH_KEY" > ~/.ssh/onfood-prod
+          chmod 600 ~/.ssh/onfood-prod
+          ssh-keyscan -H "$PROD_DEPLOY_HOST" >> ~/.ssh/known_hosts
+
+          remote_tar="/tmp/onfood-prod-infra-$RELEASE_SHA.tgz"
+          scp -i ~/.ssh/onfood-prod /tmp/onfood-prod-infra.tgz \
+            "$PROD_DEPLOY_USER@$PROD_DEPLOY_HOST:$remote_tar"
+
+          ssh -i ~/.ssh/onfood-prod "$PROD_DEPLOY_USER@$PROD_DEPLOY_HOST" \
+            "RELEASE_SHA='$RELEASE_SHA' REMOTE_TAR='$remote_tar' bash -s" <<'REMOTE'
+          set -euo pipefail
+          release_dir="/tmp/onfood-prod-infra-$RELEASE_SHA"
+          install_dir="/opt/onfood-prod/infra"
+          rm -rf "$release_dir"
+          mkdir -p "$release_dir"
+          tar -xzf "$REMOTE_TAR" -C "$release_dir"
+          bash -n "$release_dir/scripts/deploy-prod.sh"
+          mkdir -p "$install_dir"
+          cp -a "$release_dir"/. "$install_dir"/
+          chmod +x "$install_dir"/scripts/*.sh
+          cd /opt/onfood-prod
+          docker compose -f infra/docker-compose.prod.yml --env-file .env config >/dev/null
+          rm -rf "$release_dir" "$REMOTE_TAR"
+          REMOTE
+
+      - name: Post-deploy prod status
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.PROD_DEPLOY_HOST }}
+          username: ${{ secrets.PROD_DEPLOY_USER }}
+          key: ${{ secrets.PROD_DEPLOY_SSH_KEY }}
+          script: |
+            set -euo pipefail
+            cd /opt/onfood-prod
+            docker compose -f infra/docker-compose.prod.yml --env-file .env ps
