@@ -1,0 +1,211 @@
+name: onfood-prod
+
+# OnFood PRODUCTION stack for onfood-prod (144.91.116.251).
+# Scope is intentionally separate from the dev stack:
+#   install dir: /opt/onfood-prod
+#   containers:  onfood-prod-*
+#   network:     onfood_prod_internal
+#   volumes:     onfood_prod_*
+#
+# Public traffic is owned by host nginx. Containers bind public-facing services
+# only to 127.0.0.1 ports. Postgres and Redis are internal-only.
+
+x-restart: &restart
+  restart: unless-stopped
+
+x-logging: &logging
+  logging:
+    driver: json-file
+    options:
+      max-size: "25m"
+      max-file: "5"
+
+x-go-depends: &go-depends
+  postgres:
+    condition: service_healthy
+  redis:
+    condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: onfood-prod-postgres
+    <<: [*restart, *logging]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [onfood-prod]
+
+  redis:
+    image: redis:7-alpine
+    container_name: onfood-prod-redis
+    <<: [*restart, *logging]
+    command: ["redis-server", "--save", "60", "1", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [onfood-prod]
+
+  minio:
+    image: minio/minio:latest
+    container_name: onfood-prod-minio
+    <<: [*restart, *logging]
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "127.0.0.1:4025:9000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    networks: [onfood-prod]
+
+  minio-setup:
+    image: minio/mc:latest
+    container_name: onfood-prod-minio-setup
+    <<: *logging
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      sh -c "
+      mc alias set local http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD} &&
+      mc mb --ignore-existing local/${R2_BUCKET:-onfood-images} &&
+      mc anonymous set download local/${R2_BUCKET:-onfood-images}
+      "
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    restart: "no"
+    networks: [onfood-prod]
+
+  migrate:
+    image: ghcr.io/onfood/migrations:prod
+    container_name: onfood-prod-migrate
+    <<: *logging
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+    restart: "no"
+    networks: [onfood-prod]
+
+  eats-api:
+    image: ghcr.io/onfood/eats-api:prod
+    container_name: onfood-prod-eats-api
+    <<: [*restart, *logging]
+    depends_on: *go-depends
+    env_file: ../env/backend.prod.env
+    ports:
+      - "127.0.0.1:4020:8001"
+    networks: [onfood-prod]
+
+  business-api:
+    image: ghcr.io/onfood/business-api:prod
+    container_name: onfood-prod-business-api
+    <<: [*restart, *logging]
+    depends_on: *go-depends
+    env_file: ../env/backend.prod.env
+    ports:
+      - "127.0.0.1:4021:8002"
+    networks: [onfood-prod]
+
+  eats-bot:
+    image: ghcr.io/onfood/eats-bot:prod
+    container_name: onfood-prod-eats-bot
+    <<: [*restart, *logging]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: ../env/backend.prod.env
+    ports:
+      - "127.0.0.1:4023:8101"
+    networks: [onfood-prod]
+
+  business-bot:
+    image: ghcr.io/onfood/business-bot:prod
+    container_name: onfood-prod-business-bot
+    <<: [*restart, *logging]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: ../env/backend.prod.env
+    ports:
+      - "127.0.0.1:4024:8102"
+    networks: [onfood-prod]
+
+  scheduler:
+    image: ghcr.io/onfood/scheduler:prod
+    container_name: onfood-prod-scheduler
+    <<: [*restart, *logging]
+    depends_on: *go-depends
+    env_file: ../env/backend.prod.env
+    volumes:
+      - story_tmp:/tmp/onfood-stories
+    networks: [onfood-prod]
+
+  eats:
+    image: ghcr.io/onfood/eats:prod
+    container_name: onfood-prod-eats
+    <<: [*restart, *logging]
+    depends_on: [eats-api]
+    env_file: ../env/eats.prod.env
+    ports:
+      - "127.0.0.1:4010:3000"
+    networks: [onfood-prod]
+
+  business:
+    image: ghcr.io/onfood/business:prod
+    container_name: onfood-prod-business
+    <<: [*restart, *logging]
+    depends_on: [business-api]
+    env_file: ../env/business.prod.env
+    ports:
+      - "127.0.0.1:4011:3001"
+    networks: [onfood-prod]
+
+  adminpanel:
+    image: ghcr.io/onfood/adminpanel:prod
+    container_name: onfood-prod-adminpanel
+    <<: [*restart, *logging]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: ../env/adminpanel.prod.env
+    ports:
+      - "127.0.0.1:4012:3000"
+    networks: [onfood-prod]
+
+volumes:
+  pg_data:
+    name: onfood_prod_pg_data
+  redis_data:
+    name: onfood_prod_redis_data
+  minio_data:
+    name: onfood_prod_minio_data
+  story_tmp:
+    name: onfood_prod_story_tmp
+
+networks:
+  onfood-prod:
+    name: onfood_prod_internal
+    driver: bridge
