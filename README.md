@@ -112,14 +112,15 @@ Required production secrets:
 - `PROD_DEPLOY_HOST` (`144.91.116.251`)
 - `PROD_DEPLOY_USER`
 - `PROD_DEPLOY_SSH_KEY`
-- GHCR pull creds written server-side to `/opt/onfood-prod/.ghcr-*`
+- GitHub Actions passes `GITHUB_TOKEN` to the remote deploy as `GHCR_TOKEN`;
+  server-side `/opt/onfood-prod/.ghcr-*` remains only a fallback.
 
 Production build args/secrets by repo:
 
 | Repo | Image(s) | Deploy service | Production build args/secrets |
 |---|---|---|---|
-| `customer` | `ghcr.io/onfood/eats:prod`, `:prod-<sha>` | `eats` | `NEXT_PUBLIC_BACKEND_URL=https://eats.onfood.uz`, `NEXT_PUBLIC_EATS_APP_URL=https://eats.onfood.uz`, `PROD_NEXT_PUBLIC_TELEGRAM_OAUTH_CLIENT_ID`, `PROD_NEXT_PUBLIC_YANDEX_MAPS_API_KEY` |
-| `business` | `ghcr.io/onfood/business:prod`, `:prod-<sha>` | `business` | `NEXT_PUBLIC_BACKEND_URL=https://business.onfood.uz`, `NEXT_PUBLIC_BUSINESS_APP_URL=https://business.onfood.uz`, `PROD_NEXT_PUBLIC_TELEGRAM_OAUTH_CLIENT_ID`, `PROD_NEXT_PUBLIC_YANDEX_MAPS_API_KEY` |
+| `customer` | `ghcr.io/onfood/eats:prod`, `:prod-<sha>` | `eats` | `NEXT_PUBLIC_BACKEND_URL=https://eats.onfood.uz`, `NEXT_PUBLIC_EATS_APP_URL=https://eats.onfood.uz`, `PROD_EATS_TELEGRAM_OAUTH_CLIENT_ID`, `PROD_NEXT_PUBLIC_YANDEX_MAPS_API_KEY` |
+| `business` | `ghcr.io/onfood/business:prod`, `:prod-<sha>` | `business` | `NEXT_PUBLIC_BACKEND_URL=https://business.onfood.uz`, `NEXT_PUBLIC_BUSINESS_APP_URL=https://business.onfood.uz`, `PROD_BUSINESS_TELEGRAM_OAUTH_CLIENT_ID`, `PROD_NEXT_PUBLIC_YANDEX_MAPS_API_KEY` |
 | `adminpanel` | `ghcr.io/onfood/adminpanel:prod`, `:prod-<sha>` | `adminpanel` | `NEXT_PUBLIC_ADMIN_APP_URL=https://admin.onfood.uz`, `PROD_NEXT_PUBLIC_YANDEX_MAPS_API_KEY` |
 | `backend` | `ghcr.io/onfood/eats-api:prod`, `business-api:prod`, `eats-bot:prod`, `business-bot:prod`, `scheduler:prod` plus `:prod-<sha>` | `backend` | `VERSION=<sha>` |
 | `migrations` | `ghcr.io/onfood/migrations:prod`, `:prod-<sha>` | `migrations` | none |

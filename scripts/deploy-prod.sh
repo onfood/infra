@@ -42,7 +42,7 @@ case "$SERVICE" in
     RUN_MINIO_SETUP=1
     ;;
   backend)
-    PULL_TARGETS=(migrate "${BACKEND_SERVICES[@]}")
+    PULL_TARGETS=("${BACKEND_SERVICES[@]}")
     UP_TARGETS=("${BACKEND_SERVICES[@]}")
     RUN_MIGRATE=1
     ;;
@@ -56,7 +56,7 @@ case "$SERVICE" in
     UP_TARGETS=("$SERVICE")
     ;;
   eats-api|business-api|eats-bot|business-bot|scheduler)
-    PULL_TARGETS=(migrate "$SERVICE")
+    PULL_TARGETS=("$SERVICE")
     UP_TARGETS=("$SERVICE")
     RUN_MIGRATE=1
     ;;
@@ -70,10 +70,17 @@ case "$SERVICE" in
     ;;
 esac
 
-if [[ -f $INSTALL_DIR/.ghcr-token && -f $INSTALL_DIR/.ghcr-user ]]; then
+if [[ -n "${GHCR_TOKEN:-}" ]]; then
+  [[ -n "${GHCR_USER:-}" ]] || err "GHCR_USER is required when GHCR_TOKEN is set"
+  log "ghcr login from environment"
+  docker login ghcr.io -u "$GHCR_USER" \
+    --password-stdin <<<"$GHCR_TOKEN" >/dev/null
+elif [[ -f $INSTALL_DIR/.ghcr-token && -f $INSTALL_DIR/.ghcr-user ]]; then
   log "ghcr login"
   docker login ghcr.io -u "$(cat "$INSTALL_DIR/.ghcr-user")" \
     --password-stdin < "$INSTALL_DIR/.ghcr-token" >/dev/null
+else
+  log "ghcr login skipped; no credentials provided"
 fi
 
 log "pulling: ${PULL_TARGETS[*]}"
