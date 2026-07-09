@@ -112,8 +112,8 @@ Required production secrets:
 - `PROD_DEPLOY_HOST` (`144.91.116.251`)
 - `PROD_DEPLOY_USER`
 - `PROD_DEPLOY_SSH_KEY`
-- `PROD_GHCR_USER`
-- `PROD_GHCR_TOKEN` with `read:packages`
+- App workflows pass a short-lived GitHub Actions token to the remote deploy
+  for GHCR pulls.
 - Server-side `/opt/onfood-prod/.ghcr-*` remains only a manual fallback.
 
 Production build args/secrets by repo:
