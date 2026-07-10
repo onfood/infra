@@ -60,7 +60,7 @@ services:
     networks: [onfood-prod]
 
   minio:
-    image: minio/minio:latest
+    image: minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
     container_name: onfood-prod-minio
     <<: [*restart, *logging]
     command: ["server", "/data", "--console-address", ":9001"]
@@ -79,7 +79,7 @@ services:
     networks: [onfood-prod]
 
   minio-setup:
-    image: minio/mc:latest
+    image: minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
     container_name: onfood-prod-minio-setup
     <<: *logging
     depends_on:
@@ -89,7 +89,11 @@ services:
       sh -c "
       mc alias set local http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD} &&
       mc mb --ignore-existing local/${R2_BUCKET:-onfood-images} &&
-      mc anonymous set download local/${R2_BUCKET:-onfood-images}
+      mc anonymous set download local/${R2_BUCKET:-onfood-images} &&
+      mc mb --ignore-existing local/${STORY_PRIVATE_S3_BUCKET:-onfood-story-private} &&
+      mc anonymous set none local/${STORY_PRIVATE_S3_BUCKET:-onfood-story-private} &&
+      mc mb --ignore-existing local/${STORY_PUBLIC_S3_BUCKET:-onfood-images} &&
+      mc anonymous set download local/${STORY_PUBLIC_S3_BUCKET:-onfood-images}
       "
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
@@ -157,10 +161,30 @@ services:
     image: ghcr.io/onfood/scheduler:prod
     container_name: onfood-prod-scheduler
     <<: [*restart, *logging]
-    depends_on: *go-depends
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio-setup:
+        condition: service_completed_successfully
     env_file: ../env/backend.prod.env
-    volumes:
-      - story_tmp:/tmp/onfood-stories
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    cpus: "2.0"
+    mem_limit: 2g
+    pids_limit: 256
+    stop_grace_period: 30s
+    tmpfs:
+      - /tmp/onfood-media:rw,noexec,nosuid,nodev,size=1g,uid=65534,gid=65534,mode=0700
+    healthcheck:
+      test: ["CMD-SHELL", "pidof scheduler >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
     networks: [onfood-prod]
 
   eats:
@@ -202,8 +226,6 @@ volumes:
     name: onfood_prod_redis_data
   minio_data:
     name: onfood_prod_minio_data
-  story_tmp:
-    name: onfood_prod_story_tmp
 
 networks:
   onfood-prod:
